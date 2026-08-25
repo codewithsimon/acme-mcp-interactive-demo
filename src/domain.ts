@@ -20,10 +20,13 @@ export interface ToolDefinition {
 export interface ProtocolEvent {
   id: number
   at: string
+  traceId: string
   kind: EventKind
   status: EventStatus
   title: string
   detail: string
+  from: string
+  to: string
   payload?: unknown
 }
 

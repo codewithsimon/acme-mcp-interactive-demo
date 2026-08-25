@@ -16,7 +16,7 @@ describe('simulation reducer', () => {
       ...initialState,
       mode: 'explore' as const,
       skipAnimation: true,
-      events: [{ id: 1, at: 'now', kind: 'protocol' as const, status: 'sent' as const, title: 'call', detail: 'detail' }],
+      events: [{ id: 1, at: 'now', traceId: 'mcp-001', kind: 'protocol' as const, status: 'sent' as const, title: 'call', detail: 'detail', from: 'Client', to: 'Server' }],
       usedTokens: [preparedDeployment.token],
       issueCreated: true,
     }
@@ -71,5 +71,19 @@ describe('simulation reducer', () => {
     expect(forward.events).toEqual(completed.events)
     expect(forward.audit).toEqual(completed.audit)
     expect(forward.deploymentComplete).toBe(true)
+  })
+
+  it('negotiates capabilities once and preserves them across host switching', () => {
+    const connected = simulationReducer(initialState, { type: 'DISCOVER_TOOLS' })
+    expect(connected.serverConnected).toBe(true)
+    expect(connected.events.map((event) => event.title)).toEqual([
+      'initialize',
+      'initialize result',
+      'tools/list',
+      'tools/list result',
+    ])
+    const switched = simulationReducer(connected, { type: 'SWITCH_HOST' })
+    expect(switched.activeHost).toBe('Dev Console')
+    expect(switched.events).toEqual(connected.events)
   })
 })
