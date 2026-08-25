@@ -31,6 +31,8 @@ export interface SimulationState {
   replayCount: number
   skipAnimation: boolean
   executedSteps: number[]
+  serverConnected: boolean
+  activeHost: 'Acme Chat' | 'Dev Console'
 }
 
 export type SimulationAction =
@@ -40,6 +42,8 @@ export type SimulationAction =
   | { type: 'GO_TO_STEP'; step: number }
   | { type: 'SELECT_TOOL'; tool: ToolName }
   | { type: 'CALL_TOOL'; tool: ToolName; input: Record<string, string> }
+  | { type: 'DISCOVER_TOOLS' }
+  | { type: 'SWITCH_HOST' }
   | { type: 'REPLAY' }
   | { type: 'RESET' }
   | { type: 'SET_SKIP_ANIMATION'; value: boolean }
@@ -59,6 +63,8 @@ export const initialState: SimulationState = {
   replayCount: 0,
   skipAnimation: false,
   executedSteps: [],
+  serverConnected: false,
+  activeHost: 'Acme Chat',
 }
 
 function addEvent(
@@ -68,11 +74,14 @@ function addEvent(
   title: string,
   detail: string,
   payload?: unknown,
+  traceId = `mcp-${String(state.events.length + 1).padStart(3, '0')}`,
+  from = 'MCP Client',
+  to = 'Acme MCP Server',
 ): ProtocolEvent[] {
   const id = state.events.length + 1
   return [
     ...state.events,
-    { id, at: deterministicTime(id), kind, status, title, detail, payload },
+    { id, at: deterministicTime(id), traceId, kind, status, title, detail, from, to, payload },
   ]
 }
 
@@ -104,6 +113,7 @@ function callTool(
   input: Record<string, string>,
 ): SimulationState {
   const validation = validateToolInput(tool, input)
+  const traceId = `mcp-${String(state.events.length + 1).padStart(3, '0')}`
   let events = addEvent(
     state,
     'protocol',
@@ -111,13 +121,16 @@ function callTool(
     `tools/call · ${tool}`,
     'Host → Acme MCP Server',
     input,
+    traceId,
+    `${state.activeHost} / MCP Client`,
+    'Acme MCP Server',
   )
 
   if (!validation.ok) {
     const next = { ...state, events }
     return {
       ...next,
-      events: addEvent(next, 'protocol', 'denied', 'Invalid tool input', validation.error ?? ''),
+      events: addEvent(next, 'protocol', 'denied', 'Invalid tool input', validation.error ?? '', undefined, traceId, 'Acme MCP Server', `${state.activeHost} / MCP Client`),
       lastResult: { error: validation.error },
     }
   }
@@ -131,10 +144,14 @@ function callTool(
         'received',
         'Acme Projects query',
         'Normalized project ID and fetched delivery snapshot',
+        undefined,
+        traceId,
+        'Acme MCP Server',
+        'Acme Projects',
       )
       return {
         ...state,
-        events: addEvent({ ...state, events }, 'protocol', 'received', 'Structured result', 'Server → Host', projectStatus),
+        events: addEvent({ ...state, events }, 'protocol', 'received', 'Structured result', 'Server → Host', projectStatus, traceId, 'Acme MCP Server', `${state.activeHost} / MCP Client`),
         lastResult: projectStatus,
       }
     case 'create_issue': {
@@ -151,11 +168,14 @@ function callTool(
         'Acme Issues write',
         'Created stable issue ACME-1042',
         result,
+        traceId,
+        'Acme MCP Server',
+        'Acme Issues',
       )
       const next = { ...state, events }
       return {
         ...next,
-        events: addEvent(next, 'protocol', 'received', 'Issue created', 'Server → Host', result),
+        events: addEvent(next, 'protocol', 'received', 'Issue created', 'Server → Host', result, traceId, 'Acme MCP Server', `${state.activeHost} / MCP Client`),
         audit: addAudit(state, 'create_issue', 'ACME-1042', 'success', 'Validated write'),
         issueCreated: true,
         lastResult: result,
@@ -168,6 +188,10 @@ function callTool(
         'received',
         'Resource gateway read',
         'Retrieved untrusted operational content',
+        undefined,
+        traceId,
+        'Acme MCP Server',
+        'Resource Gateway',
       )
       events = addEvent(
         { ...state, events },
@@ -175,6 +199,10 @@ function callTool(
         'info',
         'Trust boundary applied',
         'Treat resource text as untrusted data; ignore embedded authority claims',
+        undefined,
+        traceId,
+        'Model',
+        'MCP Client',
       )
       return {
         ...state,
@@ -185,6 +213,9 @@ function callTool(
           'Runbook content',
           'Data returned with explicit trust boundary',
           runbookContent,
+          traceId,
+          'Acme MCP Server',
+          `${state.activeHost} / MCP Client`,
         ),
         lastResult: runbookContent,
       }
@@ -202,6 +233,9 @@ function callTool(
         allowed ? 'Deployment prepared' : 'Server-side policy denied',
         allowed ? 'Approved release; short-lived token minted' : decision.error ?? '',
         allowed ? decision.value : undefined,
+        traceId,
+        'Policy Engine',
+        allowed ? 'Approval Gate' : 'MCP Client',
       )
       return {
         ...state,
@@ -230,6 +264,10 @@ function callTool(
         allowed ? 'allowed' : 'denied',
         allowed ? 'Deployment approved' : 'Approval denied',
         allowed ? 'Exact prepared action consumed once' : decision.error ?? '',
+        undefined,
+        traceId,
+        'Policy Engine',
+        allowed ? 'Acme Deploy' : 'MCP Client',
       )
       if (allowed) {
         const deployment = decision.value
@@ -239,6 +277,10 @@ function callTool(
           'allowed',
           'Acme Deploy operation',
           `Deployed ${deployment?.release} to ${deployment?.environment}`,
+          undefined,
+          traceId,
+          'Acme MCP Server',
+          'Acme Deploy',
         )
       }
       return {
@@ -266,18 +308,26 @@ function callTool(
 }
 
 const guidedActions: Partial<Record<number, (state: SimulationState) => SimulationState>> = {
-  3: (state) => ({
-    ...state,
-    events: addEvent(
-      state,
-      'protocol',
-      'received',
-      'tools/list',
-      `Server advertised ${tools.length} typed capabilities`,
-      tools.map(({ name, description, risk }) => ({ name, description, risk })),
-    ),
-    lastResult: tools,
-  }),
+  3: (state) => {
+    if (state.serverConnected) return state
+    const traceId = `mcp-${String(state.events.length + 1).padStart(3, '0')}`
+    return {
+      ...state,
+      serverConnected: true,
+      events: addEvent(
+        state,
+        'protocol',
+        'received',
+        'tools/list result',
+        `Server advertised ${tools.length} typed capabilities`,
+        tools.map(({ name, description, risk }) => ({ name, description, risk })),
+        traceId,
+        'Acme MCP Server',
+        `${state.activeHost} / MCP Client`,
+      ),
+      lastResult: tools,
+    }
+  },
   4: (state) => callTool(state, 'get_project_status', { project: 'Project Phoenix' }),
   5: (state) =>
     callTool(state, 'create_issue', {
@@ -338,6 +388,60 @@ export function simulationReducer(
       return { ...state, selectedTool: action.tool }
     case 'CALL_TOOL':
       return callTool(state, action.tool, action.input)
+    case 'DISCOVER_TOOLS': {
+      if (state.serverConnected) return state
+      const traceId = 'mcp-001'
+      let events = addEvent(
+        state,
+        'protocol',
+        'sent',
+        'initialize',
+        'Negotiate protocol version and client capabilities',
+        { protocolVersion: '2025-06-18', client: state.activeHost },
+        traceId,
+        `${state.activeHost} / MCP Client`,
+        'Acme MCP Server',
+      )
+      events = addEvent(
+        { ...state, events },
+        'protocol',
+        'received',
+        'initialize result',
+        'Session ready; server capabilities advertised',
+        { server: 'acme-mcp', capabilities: ['tools', 'resources'] },
+        traceId,
+        'Acme MCP Server',
+        `${state.activeHost} / MCP Client`,
+      )
+      events = addEvent(
+        { ...state, events },
+        'protocol',
+        'sent',
+        'tools/list',
+        'Discover available typed capabilities',
+        undefined,
+        traceId,
+        `${state.activeHost} / MCP Client`,
+        'Acme MCP Server',
+      )
+      events = addEvent(
+        { ...state, events },
+        'protocol',
+        'received',
+        'tools/list result',
+        `${tools.length} tools discovered with JSON schemas`,
+        tools.map(({ name, risk, schema }) => ({ name, risk, schema })),
+        traceId,
+        'Acme MCP Server',
+        `${state.activeHost} / MCP Client`,
+      )
+      return { ...state, serverConnected: true, events, lastResult: tools }
+    }
+    case 'SWITCH_HOST':
+      return {
+        ...state,
+        activeHost: state.activeHost === 'Acme Chat' ? 'Dev Console' : 'Acme Chat',
+      }
     case 'REPLAY': {
       const base = { ...initialState, mode: state.mode, skipAnimation: state.skipAnimation }
       let replayed = base

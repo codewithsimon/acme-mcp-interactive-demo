@@ -26,7 +26,9 @@ Vite serves the local app at the URL printed in the terminal. The deployed demo 
 
 Start in **Guided** mode and advance each chapter manually. The story moves from a pre-MCP integration tangle through discovery, structured tools, host portability, an indirect prompt-injection attempt, server-side denial, and a valid prepare/approve deployment. Nothing auto-advances.
 
-Switch to **Free explore** to inspect the capability catalog and schemas, edit simulated tool inputs, invoke the deterministic tools, and inspect the protocol event stream and append-only audit log. **Reset simulation** restores the fixture state.
+Switch to **Free explore** to open an MCP session and watch the deterministic `initialize` and `tools/list` negotiation. Choose a natural-language intent to see it move through four distinct lanes: user intent, non-authoritative model proposal, typed MCP exchange, and the server authority boundary. The live trace uses correlated request IDs and shows downstream and policy decisions separately.
+
+Use **swap host** to move the same negotiated server contract between Acme Chat and Dev Console. Select **Inspect JSON schema** for advanced form-driven calls and structured results. **Reset simulation** clears the connection, trace, audit log, and local exploration state.
 
 For a projector, use a current Chromium, Firefox, or Safari browser at 100% zoom and enter browser full-screen. The layout adapts to laptop, 16:9 projector, tablet, and narrow screens. The app honors the operating system’s reduced-motion preference; **Skip motion** also disables transitions for the current session.
 
@@ -53,7 +55,7 @@ Typed fixtures, validators, policy decisions, and the state machine live in `src
 - approved release `phoenix-2026.08`
 - one-time prepare token `prep_phx_202608_7K2M`
 
-Protocol messages, illustrative model reasoning, downstream operations, and server policy decisions are explicitly labeled in the event stream.
+Protocol messages, illustrative model reasoning, downstream operations, and server policy decisions are explicitly labeled in the correlated event stream. The visual authority boundary reinforces that models may propose actions while server-owned schemas and policy decide what can execute.
 
 ## GitHub Pages
 

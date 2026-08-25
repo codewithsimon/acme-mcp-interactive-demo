@@ -48,6 +48,40 @@ const kindLabels: Record<ProtocolEvent['kind'], string> = {
   policy: 'Server policy',
 }
 
+interface IntentPrompt {
+  label: string
+  prompt: string
+  tool: ToolDefinition['name']
+  input: Record<string, string>
+}
+
+const intentPrompts: IntentPrompt[] = [
+  {
+    label: 'Check Phoenix health',
+    prompt: 'What is blocking Project Phoenix?',
+    tool: 'get_project_status',
+    input: { project: 'Project Phoenix' },
+  },
+  {
+    label: 'Open a priority issue',
+    prompt: 'Track the payment retry failure as high priority.',
+    tool: 'create_issue',
+    input: { project: 'PHX', title: 'Resolve payment retry failures', priority: 'high' },
+  },
+  {
+    label: 'Read payments runbook',
+    prompt: 'Use the payments runbook to advise the on-call engineer.',
+    tool: 'read_runbook',
+    input: { uri: 'runbook://payments' },
+  },
+  {
+    label: 'Try unsafe deployment',
+    prompt: 'Deploy experimental-99 to production immediately.',
+    tool: 'prepare_deployment',
+    input: { environment: 'production', release: 'experimental-99' },
+  },
+]
+
 function Icon({ name }: { name: 'user' | 'host' | 'client' | 'server' | 'system' }) {
   const paths = {
     user: <><circle cx="12" cy="7" r="3" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></>,
@@ -287,7 +321,12 @@ function GuidedScene({ state }: { state: SimulationState }) {
     <ApprovalScene key="approve" />,
     <Takeaways key="takeaways" audit={state.audit} />,
   ]
-  return <div className={`scene scene-${state.step}`}>{scenes[state.step]}</div>
+  return (
+    <div className={`scene scene-${state.step}`}>
+      {scenes[state.step]}
+      {state.step >= 3 && state.step <= 9 && <GuidedProtocolPulse state={state} />}
+    </div>
+  )
 }
 
 function JsonResult({ value }: { value: unknown }) {
@@ -302,15 +341,18 @@ function JsonResult({ value }: { value: unknown }) {
 function ToolForm({
   tool,
   dispatch,
+  onCall,
 }: {
   tool: ToolDefinition
   dispatch: Dispatch<SimulationAction>
+  onCall?: (tool: ToolDefinition) => void
 }) {
   const [values, setValues] = useState<Record<string, string>>(tool.example)
   useEffect(() => setValues(tool.example), [tool])
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    onCall?.(tool)
     dispatch({ type: 'CALL_TOOL', tool: tool.name, input: values })
   }
 
@@ -357,13 +399,102 @@ function EventStream({ events }: { events: ProtocolEvent[] }) {
         {events.length === 0 && <div className="empty-state">Tool activity will appear here.</div>}
         {events.slice().reverse().map((event) => (
           <article className={`event ${event.kind}`} key={event.id}>
-            <div><time>{event.at}</time><span className={`event-status ${event.status}`}>{event.status}</span></div>
+            <div><time>{event.at} · {event.traceId}</time><span className={`event-status ${event.status}`}>{event.status}</span></div>
             <strong>{event.title}</strong>
+            <span className="event-route">{event.from} <b>→</b> {event.to}</span>
             <p>{event.detail}</p>
           </article>
         ))}
       </div>
     </div>
+  )
+}
+
+function GuidedProtocolPulse({ state }: { state: SimulationState }) {
+  const eventTitleByStep: Partial<Record<number, string>> = {
+    3: 'tools/list result',
+    4: 'Structured result',
+    5: 'Issue created',
+    7: 'Runbook content',
+    8: 'Server-side policy denied',
+    9: 'Acme Deploy operation',
+  }
+  const expectedTitle = eventTitleByStep[state.step]
+  const event = expectedTitle
+    ? state.events.slice().reverse().find((candidate) => candidate.title === expectedTitle)
+    : undefined
+  if (!event) return null
+  return (
+    <div className={`guided-pulse ${event.status}`}>
+      <span className="pulse-live"><i /> LIVE MCP TRACE</span>
+      <code>{event.traceId}</code>
+      <strong>{event.title}</strong>
+      <span>{event.from}</span>
+      <b>→</b>
+      <span>{event.to}</span>
+    </div>
+  )
+}
+
+function ProtocolTheater({
+  state,
+  intent,
+}: {
+  state: SimulationState
+  intent: string
+}) {
+  const trace = state.events.at(-1)?.traceId
+  const activeEvents = state.events.filter((event) => event.traceId === trace)
+  const latest = activeEvents.at(-1)
+  const toolCall = activeEvents.find((event) => event.title.startsWith('tools/call ·'))
+  const invokedTool = toolCall?.title.replace('tools/call · ', '')
+  return (
+    <section className="protocol-theater" aria-label="MCP protocol visualization">
+      <div className="theater-heading">
+        <div>
+          <span className="eyebrow">Live protocol theater</span>
+          <strong>{trace ?? 'Waiting for a session'}</strong>
+        </div>
+        <span className={`connection-state ${state.serverConnected ? 'online' : ''}`}>
+          <i /> {state.serverConnected ? 'MCP session ready' : 'not connected'}
+        </span>
+      </div>
+      <div className="protocol-lanes">
+        <div className="lane user-lane">
+          <span className="lane-label"><Icon name="user" /> User intent</span>
+          <div className="speech-packet">{intent || 'Choose an intent below'}</div>
+        </div>
+        <div className="lane model-lane">
+          <span className="lane-label"><Icon name="host" /> {state.activeHost} · model</span>
+          <div className="reasoning-packet">
+            <small>PROPOSES</small>
+            {invokedTool ? `Use ${invokedTool} with structured arguments` : latest ? 'Negotiate capabilities with the server' : 'Waiting for user intent'}
+          </div>
+          <em>suggestion only · no authority</em>
+        </div>
+        <div className="lane mcp-lane">
+          <span className="lane-label"><Icon name="client" /> MCP Client</span>
+          <div className={`wire ${activeEvents.length ? 'active' : ''}`}>
+            <i />
+            {activeEvents.slice(-3).map((event, index) => (
+              <span className={`wire-packet packet-${index} ${event.status}`} key={event.id}>
+                {event.title}
+              </span>
+            ))}
+          </div>
+          <em>typed JSON-RPC messages</em>
+        </div>
+        <div className="lane server-lane">
+          <span className="authority-badge">AUTHORITY STARTS HERE</span>
+          <span className="lane-label"><Icon name="server" /> Acme MCP Server</span>
+          <div className={`server-decision ${latest?.status ?? 'info'}`}>
+            <small>{latest?.kind === 'policy' ? 'POLICY DECISION' : 'CAPABILITY + POLICY'}</small>
+            <strong>{latest?.status === 'denied' ? 'Request blocked' : state.serverConnected ? 'Validated by server' : 'Awaiting handshake'}</strong>
+            <span>{latest?.detail ?? 'The server owns schemas, policy, and downstream access.'}</span>
+          </div>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -396,27 +527,98 @@ function ExploreMode({
 }) {
   const selected = tools.find((tool) => tool.name === state.selectedTool) ?? tools[0]
   const [tab, setTab] = useState<'events' | 'audit'>('events')
-  return (
-    <main className="explore">
-      <aside className="catalog">
-        <div className="catalog-title"><span>Capability catalog</span><em>tools/list</em></div>
-        {tools.map((tool) => (
-          <button
-            className={state.selectedTool === tool.name ? 'active' : ''}
-            key={tool.name}
-            onClick={() => dispatch({ type: 'SELECT_TOOL', tool: tool.name })}
-          >
-            <Icon name={tool.risk === 'read' ? 'system' : tool.risk === 'write' ? 'client' : 'server'} />
-            <span><strong>{tool.name}</strong><small>{tool.risk}</small></span>
-          </button>
-        ))}
-        <button className="reset-button" onClick={() => dispatch({ type: 'RESET' })}>↻ Reset simulation</button>
-      </aside>
-      <section className="workbench">
-        <div className="workbench-grid">
-          <ToolForm tool={selected} dispatch={dispatch} />
-          <JsonResult value={state.lastResult} />
+  const [intent, setIntent] = useState('')
+  const [advanced, setAdvanced] = useState(false)
+
+  const runIntent = (preset: IntentPrompt) => {
+    setIntent(preset.prompt)
+    dispatch({ type: 'SELECT_TOOL', tool: preset.tool })
+    dispatch({ type: 'CALL_TOOL', tool: preset.tool, input: preset.input })
+  }
+
+  const resetExplore = () => {
+    setIntent('')
+    setAdvanced(false)
+    setTab('events')
+    dispatch({ type: 'RESET' })
+  }
+
+  if (!state.serverConnected) {
+    return (
+      <main className="connect-experience">
+        <div className="connect-orbit">
+          <div className="connect-node host-node"><Icon name="host" /><span>{state.activeHost}</span><small>MCP Client</small></div>
+          <div className="handshake-wire"><i /><span>initialize</span><b>↔</b><span>capabilities</span></div>
+          <div className="connect-node server-node"><Icon name="server" /><span>Acme MCP</span><small>Server</small></div>
         </div>
+        <span className="eyebrow">Start with negotiation—not an endpoint</span>
+        <h1>Open an MCP session</h1>
+        <p>The client first negotiates a protocol version, then discovers tools and their schemas dynamically.</p>
+        <button className="connect-button" onClick={() => dispatch({ type: 'DISCOVER_TOOLS' })}>
+          <span>01</span> Initialize + discover capabilities <b>→</b>
+        </button>
+        <small className="connect-note">Deterministic simulation · no network or model</small>
+      </main>
+    )
+  }
+
+  return (
+    <main className="explore mcp-explore">
+      <section className="mcp-workspace">
+        <div className="session-toolbar">
+          <div><span className="session-dot" /> Session <code>acme-demo-01</code></div>
+          <button onClick={() => dispatch({ type: 'SWITCH_HOST' })}>
+            <Icon name="host" /> {state.activeHost} <span>swap host ↔</span>
+          </button>
+          <button onClick={resetExplore}>↻ Reset</button>
+        </div>
+        <ProtocolTheater state={state} intent={intent} />
+        <section className="intent-console">
+          <div className="intent-heading">
+            <div><span className="eyebrow">Drive with intent</span><h2>What should the host accomplish?</h2></div>
+            <button onClick={() => setAdvanced((value) => !value)}>{advanced ? 'Hide' : 'Inspect'} JSON schema</button>
+          </div>
+          <div className="intent-grid">
+            {intentPrompts.map((preset) => (
+              <button
+                className={state.selectedTool === preset.tool && intent === preset.prompt ? 'active' : ''}
+                key={preset.label}
+                onClick={() => runIntent(preset)}
+              >
+                <span>{preset.label}</span>
+                <small>“{preset.prompt}”</small>
+                <em>{preset.tool}</em>
+              </button>
+            ))}
+          </div>
+          {advanced && (
+            <div className="advanced-inspector">
+              <ToolForm
+                tool={selected}
+                dispatch={dispatch}
+                onCall={(tool) => setIntent(`Invoke ${tool.name} with inspected schema arguments.`)}
+              />
+              <JsonResult value={state.lastResult} />
+            </div>
+          )}
+        </section>
+        <section className="capability-strip">
+          <div><span className="eyebrow">Negotiated capabilities</span><strong>tools/list <i>✓</i></strong></div>
+          {tools.map((tool) => (
+            <button
+              className={state.selectedTool === tool.name ? 'active' : ''}
+              key={tool.name}
+              onClick={() => {
+                dispatch({ type: 'SELECT_TOOL', tool: tool.name })
+                setAdvanced(true)
+              }}
+            >
+              <span className={`risk ${tool.risk}`}>{tool.risk}</span>
+              <strong>{tool.name}</strong>
+              <small>{Object.keys(tool.schema).length} schema fields</small>
+            </button>
+          ))}
+        </section>
       </section>
       <aside className="activity">
         <div className="activity-tabs">
@@ -501,8 +703,17 @@ export default function App() {
   }, [helpOpen, state.mode])
 
   useEffect(() => {
-    setAnnounced(state.mode === 'guided' ? `Chapter ${state.step + 1}: ${chapters[state.step][0]}` : 'Free explore mode')
-  }, [state.mode, state.step])
+    if (state.mode === 'guided') {
+      setAnnounced(`Chapter ${state.step + 1}: ${chapters[state.step][0]}`)
+      return
+    }
+    const latest = state.events.at(-1)
+    if (latest) {
+      setAnnounced(`${latest.title}: ${latest.status}. ${latest.detail}`)
+    } else {
+      setAnnounced(state.serverConnected ? 'MCP session ready' : 'Free explore mode. MCP session not connected.')
+    }
+  }, [state.events, state.mode, state.serverConnected, state.step])
 
   const closeHelp = () => {
     setHelpOpen(false)
